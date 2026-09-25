@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1e1e1e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+  canvas {
+    display: block;
+    border-radius: 8px;
+    cursor: pointer;
+    image-rendering: auto;
+  }
+  #hud {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 320px;
+    padding: 6px 10px;
+    color: #888;
+    font-size: 11px;
+  }
+  #hud .hi { color: #d4a017; }
+  #hud .hint { color: #555; font-size: 10px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="320" height="480"></canvas>
+<div id="hud">
+  <span class="hi" id="best"></span>
+  <span class="hint">Space to flap</span>
+</div>
+<script>
+(function () {
+  const C = document.getElementById('c');
+  const ctx = C.getContext('2d');
+  const W = 320, H = 480;
+
+  const GRAVITY = 0.25;
+  const JUMP = -5.5;
+  const PIPE_SPEED = 2;
+  const GAP = 140;
+  const PW = 45;
+  const BIRD = 20;
+  const GROUND = 40;
+
+  let state = 'idle'; // idle | playing | over
+  let by = 200, bv = 0;
+  let pipes = [];
+  let frame = 0, score = 0;
+  let hi = parseInt(localStorage.getItem('driftbox-bird-hi') || '0', 10);
+
+  function reset() {
+    by = 200; bv = 0;
+    pipes = []; frame = 0; score = 0;
+  }
+
+  function jump() {
+    if (state === 'playing') { bv = JUMP; return; }
+    reset(); state = 'playing';
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+  });
+  C.addEventListener('click', jump);
+
+  function die() {
+    state = 'over';
+    if (score > hi) { hi = score; localStorage.setItem('driftbox-bird-hi', String(hi)); }
+  }
+
+  // Background elements
+  var clouds = [
+    { x: 50, y: 60, s: [25, 30, 25] },
+    { x: 180, y: 90, s: [20, 25, 20] },
+    { x: 300, y: 50, s: [22, 28, 22] },
+    { x: 420, y: 110, s: [18, 24, 18] }
+  ];
+  var buildings = [
+    { x: 0, w: 40, h: 80 }, { x: 50, w: 30, h: 60 }, { x: 90, w: 50, h: 100 },
+    { x: 150, w: 35, h: 70 }, { x: 195, w: 45, h: 90 }, { x: 250, w: 30, h: 55 },
+    { x: 290, w: 55, h: 85 }, { x: 355, w: 40, h: 75 }, { x: 405, w: 35, h: 65 },
+    { x: 450, w: 50, h: 95 }
+  ];
+
+  function loop() {
+    // Sky
+    var sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#1a1a1a');
+    sky.addColorStop(0.5, '#252525');
+    sky.addColorStop(1, '#1f1f1f');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+
+    // Clouds
+    var cs = frame * 0.3, cLoop = 500;
+    ctx.fillStyle = '#2a2a2a';
+    clouds.forEach(function (c) {
+      var cx = ((c.x - cs) % cLoop);
+      if (cx < -80) cx += cLoop;
+      ctx.beginPath();
+      ctx.arc(cx, c.y, c.s[0], 0, Math.PI * 2);
+      ctx.arc(cx + 25, c.y - 5, c.s[1], 0, Math.PI * 2);
+      ctx.arc(cx + 55, c.y, c.s[2], 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // City
+    var bs = frame * 0.5, bLoop = 510;
+    buildings.forEach(function (b) {
+      var bx = ((b.x - bs) % bLoop);
+      if (bx < -60) bx += bLoop;
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(bx, H - b.h - GROUND, b.w, b.h);
+      ctx.fillStyle = '#252525';
+      for (var wy = H - b.h - GROUND + 5; wy < H - GROUND - 5; wy += 15) {
+        for (var wx = bx + 5; wx < bx + b.w - 5; wx += 10) {
+          if (wx >= 0 && wx < W) ctx.fillRect(wx, wy, 5, 8);
+        }
+      }
+    });
+
+    // Ground
+    ctx.fillStyle = '#151515';
+    ctx.fillRect(0, H - GROUND, W, GROUND);
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(0, H - GROUND, W, 3);
+    ctx.fillStyle = '#1f1f1f';
+    var go = (frame * 2) % 20;
+    for (var gx = -go; gx < W; gx += 20) ctx.fillRect(gx, H - GROUND + 5, 10, 2);
+
+    // Physics
+    if (state === 'playing') {
+      bv += GRAVITY;
+      by += bv;
+      frame++;
+
+      if (frame % 120 === 0) {
+        pipes.push({ x: W, top: 50 + Math.random() * (H - GAP - 100) });
+      }
+
+      var alive = [];
+      for (var i = 0; i < pipes.length; i++) {
+        var p = pipes[i];
+        p.x -= PIPE_SPEED;
+        var bL = 50, bR = 50 + BIRD, bT = by, bB = by + BIRD;
+        var pL = p.x, pR = p.x + PW, gT = p.top, gB = p.top + GAP;
+        if (bR > pL && bL < pR && (bT < gT || bB > gB)) { die(); }
+        if (p.x + PW < 50 && p.x + PW > 50 - PIPE_SPEED) score++;
+        if (p.x > -PW) alive.push(p);
+      }
+      pipes = alive;
+
+      if (by < 0 || by > H - GROUND - BIRD) die();
+    }
+
+    // Draw pipes
+    pipes.forEach(function (p) {
+      ctx.fillStyle = '#7c3aed';
+      ctx.fillRect(p.x, 0, PW, p.top);
+      ctx.fillStyle = '#9333ea';
+      ctx.fillRect(p.x - 3, p.top - 15, PW + 6, 15);
+      ctx.fillStyle = '#7c3aed';
+      var botY = p.top + GAP;
+      ctx.fillRect(p.x, botY, PW, H - botY);
+      ctx.fillStyle = '#9333ea';
+      ctx.fillRect(p.x - 3, botY, PW + 6, 15);
+    });
+
+    // Draw bird
+    var bx = 50;
+    var grad = ctx.createRadialGradient(bx + 10, by + 10, 0, bx + 10, by + 10, 12);
+    grad.addColorStop(0, '#a855f7');
+    grad.addColorStop(1, '#7c3aed');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(bx + 10, by + 10, 12, 0, Math.PI * 2);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(bx + 14, by + 8, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(bx + 15, by + 8, 1.5, 0, Math.PI * 2); ctx.fill();
+    // Wing
+    ctx.fillStyle = '#9333ea';
+    ctx.beginPath();
+    var wy = by + 12 + Math.sin(frame * 0.3) * 3;
+    ctx.ellipse(bx + 5, wy, 6, 4, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Score
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(score), W / 2, 35);
+    ctx.fillStyle = '#666';
+    ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillText('Best: ' + hi, W / 2, 55);
+
+    // Overlays
+    if (state === 'idle') {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('Driftbox Bird', W / 2, H / 2 - 30);
+      ctx.fillStyle = '#888';
+      ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('Click or press Space to start', W / 2, H / 2 + 5);
+      ctx.fillText('Space / ↑ to jump', W / 2, H / 2 + 25);
+    }
+
+    if (state === 'over') {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#ef4444';
+      ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('Game Over', W / 2, H / 2 - 30);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText(String(score), W / 2, H / 2 + 10);
+      ctx.fillStyle = '#888';
+      ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.fillText('Click to retry', W / 2, H / 2 + 40);
+    }
+
+    document.getElementById('best').textContent = '★ Best: ' + hi;
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+})();
+</script>
+</body>
+</html>
